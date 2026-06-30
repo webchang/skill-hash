@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skill-hash"
+version = "0.1.0"
+description = "Canonical digest utility for Kagenti skill file collections"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "click>=8.1",
+]
+
+[project.scripts]
+skill-hash = "skill_hash.cli:main"
+
+[project.urls]
+Repository = "https://github.com/webchang/skill-hash"
+
+[tool.setuptools.packages.find]
+where = ["src"]

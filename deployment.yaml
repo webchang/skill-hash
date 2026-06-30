@@ -1,0 +1,141 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kagenti-agent
+  namespace: team1
+  annotations:
+    kagenti.io/skill-root: "/skills"
+    kagenti.io/skill-paths: "/skills/core/,/skills/tools/fetch.py,/skills/rag/"
+    kagenti.io/skill-collection-digest: "sha256:<computed-by-developer>"
+    kagenti.io/skill-digest-author: "developer@example.com"
+    kagenti.io/skill-digest-timestamp: "2026-06-25T10:00:00Z"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kagenti-agent
+  template:
+    metadata:
+      labels:
+        app: kagenti-agent
+    spec:
+      runtimeClassName: kata            # remove if not using sandboxed containers
+
+      initContainers:
+
+        # ── Init container 1: integrity gate ───────────────────────────────────
+        # Uses the skill-hash image to verify the skill collection digest
+        # against the developer-provided value in the Deployment annotation.
+        # Exits 1 (pod fails) on mismatch; exits 0 and writes manifest on match.
+        - name: skill-integrity-gate
+          image: ghcr.io/webchang/skill-hash:0.1.0
+          command: ["skill-hash", "verify"]
+          args:
+            - "--root-file"
+            - "/pod-meta/skill-root"
+            - "--paths-from-file"
+            - "/pod-meta/skill-paths"
+            - "--expected-digest-file"
+            - "/pod-meta/skill-collection-digest"
+            - "--output-manifest"
+            - "/skill-signatures/skill-manifest.sha256"
+          volumeMounts:
+            - name: pod-annotations
+              mountPath: /pod-meta
+              readOnly: true
+            - name: skill-files
+              mountPath: /skills
+              readOnly: true
+            - name: skill-signatures
+              mountPath: /skill-signatures
+
+        # ── Init container 2: attest to Sigstore (RHTAS) ──────────────────────
+        # Runs only if init container 1 succeeded (Kubernetes guarantee).
+        # Fetches JWT-SVID from SPIRE, signs the verified manifest,
+        # and records the attestation in the in-cluster Rekor transparency log.
+        - name: skill-attestor
+          image: registry.redhat.io/rhtas/cosign-rhel9:latest
+          env:
+            - name: FULCIO_URL
+              value: "https://fulcio.trusted-artifact-signer.svc.cluster.local"
+            - name: REKOR_URL
+              value: "https://rekor.trusted-artifact-signer.svc.cluster.local"
+            - name: TUF_URL
+              value: "https://tuf.trusted-artifact-signer.svc.cluster.local"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+
+              # Fetch JWT-SVID from SPIRE Workload API
+              JWT_SVID=$(spire-agent api fetch jwt \
+                -socketPath /run/spire/sockets/agent.sock \
+                -audience sigstore \
+                | grep -oP 'token\s*\K\S+')
+
+              # Initialize cosign TUF root against in-cluster RHTAS
+              cosign initialize \
+                --mirror=$TUF_URL \
+                --root=$TUF_URL/root.json
+
+              # Sign the verified manifest and record in Rekor
+              cosign sign-blob \
+                --yes \
+                --fulcio-url=$FULCIO_URL \
+                --rekor-url=$REKOR_URL \
+                --identity-token=$JWT_SVID \
+                --bundle /skill-signatures/collection.sigstore.json \
+                /skill-signatures/skill-manifest.sha256
+
+              echo "Attestation recorded in Rekor."
+          volumeMounts:
+            - name: spiffe-workload-api
+              mountPath: /run/spire/sockets
+              readOnly: true
+            - name: skill-signatures
+              mountPath: /skill-signatures
+
+      containers:
+        # ── Main agent container ───────────────────────────────────────────────
+        - name: agent
+          image: your-agent-image:latest
+          volumeMounts:
+            - name: skill-files
+              mountPath: /skills
+              readOnly: true
+            - name: skill-signatures
+              mountPath: /skill-signatures
+              readOnly: true
+
+      volumes:
+        # Downward API — exposes Deployment annotations as files
+        - name: pod-annotations
+          downwardAPI:
+            items:
+              - path: "skill-root"
+                fieldRef:
+                  fieldPath: metadata.annotations['kagenti.io/skill-root']
+              - path: "skill-paths"
+                fieldRef:
+                  fieldPath: metadata.annotations['kagenti.io/skill-paths']
+              - path: "skill-collection-digest"
+                fieldRef:
+                  fieldPath: >
+                    metadata.annotations['kagenti.io/skill-collection-digest']
+
+        # SPIFFE CSI driver — provides Workload API socket for SVID access
+        - name: spiffe-workload-api
+          csi:
+            driver: "csi.spiffe.io"
+            readOnly: true
+
+        # Skill files — replace with PVC or image-baked path as appropriate
+        - name: skill-files
+          configMap:
+            name: agent-skill-files
+
+        # Shared volume for manifest and Sigstore bundle between init containers
+        # and main container
+        - name: skill-signatures
+          emptyDir: {}
