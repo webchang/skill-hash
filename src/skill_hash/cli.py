@@ -101,10 +101,11 @@ def collect_files(
                 f"Path is neither file nor directory: {p}"
             )
 
-    # Sort by relative path string, UTF-8 encoded — locale-neutral
+    # Sort by relative path string, UTF-8 encoded — locale-neutral.
+    # Return (absolute_path, relative_path) tuples to match consumers.
     return sorted(
-        seen_relative.items(),
-        key=lambda item: str(item[0]).encode('utf-8')
+        ((abs_path, rel_path) for rel_path, abs_path in seen_relative.items()),
+        key=lambda item: str(item[1]).encode('utf-8')
     )
 
 
