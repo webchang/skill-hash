@@ -143,6 +143,130 @@ Options:
 
 ---
 
+## Tested Behavior (Worked Examples)
+
+The following test cases were run against the published image
+`ghcr.io/webchang/skill-hash:0.1.0` using this repository's **own files** as
+the skill collection. They are reproducible from a clean checkout.
+
+> **Reproducibility note.** `skill-hash` hashes every file found under the
+> given paths — including stray build artifacts such as `__pycache__/*.pyc`.
+> To reproduce the digests below, hash a clean export of the source tree, not
+> a working directory that may contain compiled files:
+>
+> ```bash
+> git archive --format=tar HEAD | tar -x -C /tmp/skills-clean
+> ```
+>
+> The digests below were computed at commit `f10f9b7` over the demo collection
+> `src/` + `src/skill_hash/cli.py`. They will change whenever those files
+> change (and the image tag is rebuilt) — regenerate them when that happens.
+
+The demo collection is two representative paths: the **directory** `src/`
+(recursed) and the **file** `src/skill_hash/cli.py`. In the examples,
+`$REPO` is a clean export of the repository (see above) and `$DIGEST` holds
+the collection digest from case 1.
+
+### Case 1 — `compute` (digest)
+
+```bash
+podman run --rm -v "$REPO":/skills:ro ghcr.io/webchang/skill-hash:0.1.0 \
+  compute --root /skills /skills/src/,/skills/src/skill_hash/cli.py
+# → sha256:42714020063673a53e9928a12a6dff42a2c9f5d17c5e3ed4e25f6ff6fa82bb13
+```
+
+### Case 2 — `compute` (manifest)
+
+Per-file digests, sorted by UTF-8 byte order of the relative path. Note that
+`src/skill_hash/cli.py` appears **once** even though it is named both directly
+and via the `src/` directory — paths are deduplicated by relative path:
+
+```bash
+podman run --rm -v "$REPO":/skills:ro ghcr.io/webchang/skill-hash:0.1.0 \
+  compute --root /skills -o manifest /skills/src/,/skills/src/skill_hash/cli.py
+```
+```
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  src/skill_hash/__init__.py
+cc57ef404df5aa5798e04f9cff67e7bb38b3560ef52e3295afecf8e143a96747  src/skill_hash/cli.py
+```
+
+(`__init__.py` is empty, so its digest is the well-known SHA-256 of zero
+bytes, `e3b0c442…b855`.)
+
+### Case 3 — `compute` (json)
+
+```bash
+podman run --rm -v "$REPO":/skills:ro ghcr.io/webchang/skill-hash:0.1.0 \
+  compute --root /skills -o json /skills/src/,/skills/src/skill_hash/cli.py
+```
+```json
+{
+  "collectionDigest": "sha256:42714020063673a53e9928a12a6dff42a2c9f5d17c5e3ed4e25f6ff6fa82bb13",
+  "root": "/skills",
+  "files": [
+    { "relativePath": "src/skill_hash/__init__.py", "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+    { "relativePath": "src/skill_hash/cli.py",      "digest": "sha256:cc57ef404df5aa5798e04f9cff67e7bb38b3560ef52e3295afecf8e143a96747" }
+  ]
+}
+```
+
+### Case 4 — `verify` matches (exit 0)
+
+```bash
+podman run --rm -v "$REPO":/skills:ro ghcr.io/webchang/skill-hash:0.1.0 \
+  verify --root /skills --expected-digest "$DIGEST" \
+  /skills/src/,/skills/src/skill_hash/cli.py
+# stderr: PASSED: digests match
+echo $?   # → 0
+```
+
+### Case 5 — `verify` mismatch (exit 1)
+
+```bash
+podman run --rm -v "$REPO":/skills:ro ghcr.io/webchang/skill-hash:0.1.0 \
+  verify --root /skills \
+  --expected-digest sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+  /skills/src/,/skills/src/skill_hash/cli.py
+# stderr: FAILED: digest mismatch
+echo $?   # → 1   (this is what fails the init container and blocks the pod)
+```
+
+### Case 6 — mount-point neutrality
+
+Mounting the **same** tree at a **different** path (`/app/skills`) with a
+matching `--root` yields the **identical** digest — manifest paths are
+relative to `--root`, not absolute:
+
+```bash
+podman run --rm -v "$REPO":/app/skills:ro ghcr.io/webchang/skill-hash:0.1.0 \
+  compute --root /app/skills /app/skills/src/,/app/skills/src/skill_hash/cli.py
+# → sha256:42714020063673a53e9928a12a6dff42a2c9f5d17c5e3ed4e25f6ff6fa82bb13  (same as Case 1)
+```
+
+### Case 7 — path outside `--root` is rejected (exit 1)
+
+```bash
+podman run --rm -v "$REPO":/skills:ro ghcr.io/webchang/skill-hash:0.1.0 \
+  compute --root /skills/src/skill_hash /skills/src/skill_hash/cli.py,/skills/pyproject.toml
+# Error: Path '/skills/pyproject.toml' is not under the declared root '/skills/src/skill_hash'.
+echo $?   # → 1
+```
+
+### Case 8 — empty directory is rejected (exit 1)
+
+A declared directory containing no files is an error, not a silent no-op —
+otherwise a digest could be computed over nothing:
+
+```bash
+mkdir -p "$REPO/empty"
+podman run --rm -v "$REPO":/skills:ro ghcr.io/webchang/skill-hash:0.1.0 \
+  compute --root /skills /skills/empty/
+# Error: Directory contains no files: '/skills/empty'. ...
+echo $?   # → 1
+```
+
+---
+
 ## Developer Workflow
 
 ### Step 1 — Compute the digest
