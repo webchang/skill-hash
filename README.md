@@ -369,22 +369,54 @@ Install RHTAS via OperatorHub on OpenShift, then configure Fulcio to accept
 SPIRE-issued JWT-SVIDs as the OIDC identity source:
 
 ```yaml
-# Securesign CR — configure SPIRE as Fulcio OIDC issuer
+# Securesign CR (rhtas.redhat.com/v1alpha1) — configure SPIRE as Fulcio OIDC
+# issuer.  Field names are PascalCase per the RHTAS v1.4 CRD schema
+# (Issuer, IssuerURL, ClientID, Type, SPIFFETrustDomain).
+apiVersion: rhtas.redhat.com/v1alpha1
+kind: Securesign
+metadata:
+  name: kagenti-securesign
+  namespace: trusted-artifact-signer
 spec:
   fulcio:
+    externalAccess:
+      enabled: true
+    certificate:
+      organizationName: Kagenti
+      commonName: fulcio.<your-cluster-domain>
     config:
       OIDCIssuers:
-        - issuer: >
-            https://spire-oidc.zero-trust-workload-identity-manager
-              .svc.cluster.local
-          clientID: sigstore
-          type: spiffe
-          SPIFFETrustDomain: "your-trust-domain.local"
+        # Use the SPIRE OIDC discovery provider's public issuer URL — the
+        # value advertised as "issuer" in its /.well-known/openid-configuration.
+        - Issuer: https://oidc-discovery-provider.<your-cluster-domain>
+          IssuerURL: https://oidc-discovery-provider.<your-cluster-domain>
+          ClientID: sigstore                 # JWT-SVID `aud` must equal this
+          Type: spiffe
+          SPIFFETrustDomain: "<your-trust-domain>"
+  # rekor / ctlog / tuf are enabled by the *presence* of their block — there
+  # is no `enabled:` field on these in the RHTAS v1.4 schema. An empty object
+  # ({}) deploys the component with defaults.
   rekor:
-    enabled: true
+    externalAccess:
+      enabled: true
+  ctlog: {}
   tuf:
-    enabled: true
+    externalAccess:
+      enabled: true
+  trillian:
+    database:
+      create: true
 ```
+
+> **Schema note (RHTAS v1.4).** `spec.rekor`, `spec.ctlog`, and `spec.tuf` are
+> *objects*, not toggles — they have no `enabled` field (`oc explain
+> securesign.spec.rekor.enabled` → `field "enabled" does not exist`). The
+> per-component `enabled` boolean only exists one level down, under
+> `externalAccess` (whether to expose an external Route). If your cluster has
+> no TimestampAuthority (`spec.tsa`), the operator still defaults
+> `spec.tuf.keys` to include `tsa.certchain.pem`, which blocks TUF forever;
+> patch it out:
+> `oc patch securesign <name> -n trusted-artifact-signer --type=merge -p '{"spec":{"tuf":{"keys":[{"name":"rekor.pub"},{"name":"ctfe.pub"},{"name":"fulcio_v1.crt.pem"}]}}}'`
 
 ---
 

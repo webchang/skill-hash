@@ -56,12 +56,15 @@ spec:
         - name: skill-attestor
           image: registry.redhat.io/rhtas/cosign-rhel9:latest
           env:
+            # RHTAS v1.4 service names: fulcio-server, rekor-server, tuf
+            # (the bare names `fulcio`/`rekor` do not exist). Internal services
+            # listen on plain HTTP :80; TLS is terminated at the external Route.
             - name: FULCIO_URL
-              value: "https://fulcio.trusted-artifact-signer.svc.cluster.local"
+              value: "http://fulcio-server.trusted-artifact-signer.svc.cluster.local"
             - name: REKOR_URL
-              value: "https://rekor.trusted-artifact-signer.svc.cluster.local"
+              value: "http://rekor-server.trusted-artifact-signer.svc.cluster.local"
             - name: TUF_URL
-              value: "https://tuf.trusted-artifact-signer.svc.cluster.local"
+              value: "http://tuf.trusted-artifact-signer.svc.cluster.local"
           command:
             - /bin/bash
             - -c
