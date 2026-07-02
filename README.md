@@ -1,7 +1,7 @@
 # skill-hash
 
 A platform-neutral CLI tool for computing and verifying canonical integrity
-digests over collections of Kagenti skill files and folders.
+digests over collections of skill files and folders.
 
 Designed for use in two contexts:
 
